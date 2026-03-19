@@ -1,0 +1,439 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>LinkLLM Server 对话中断流程设计与实现 | Lavigne-yang.Blog</title><meta name="author" content="Lavigne-yang"><meta name="copyright" content="Lavigne-yang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="ffffff"><meta name="description" content="前言在构建 LLM 服务网关时，流式响应（SSE）已经成为标配功能。用户可以实时看到 AI 的生成过程，获得更好的交互体验。然而，流式响应也带来了新的挑战：如何优雅地处理用户中断？如何在网络断开时正确清理资源？如何保证中断时已生成的内容不丢失？ 本文将分享 LinkLLM 项目中对话中断流程的设计与实现，介绍如何构建一个企业级的流式对话中断机制。 问题背景流式对话的中断场景在实际生产环境中，流式对">
+<meta property="og:type" content="article">
+<meta property="og:title" content="LinkLLM Server 对话中断流程设计与实现">
+<meta property="og:url" content="https://lavyoung.github.io/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/index.html">
+<meta property="og:site_name" content="Lavigne-yang.Blog">
+<meta property="og:description" content="前言在构建 LLM 服务网关时，流式响应（SSE）已经成为标配功能。用户可以实时看到 AI 的生成过程，获得更好的交互体验。然而，流式响应也带来了新的挑战：如何优雅地处理用户中断？如何在网络断开时正确清理资源？如何保证中断时已生成的内容不丢失？ 本文将分享 LinkLLM 项目中对话中断流程的设计与实现，介绍如何构建一个企业级的流式对话中断机制。 问题背景流式对话的中断场景在实际生产环境中，流式对">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://lavyoung.github.io/img/default_img.png">
+<meta property="article:published_time" content="2026-02-27T06:30:00.000Z">
+<meta property="article:modified_time" content="2026-03-19T14:54:14.444Z">
+<meta property="article:author" content="Lavigne-yang">
+<meta property="article:tag" content="Python">
+<meta property="article:tag" content="FastAPI">
+<meta property="article:tag" content="SSE">
+<meta property="article:tag" content="异步编程">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://lavyoung.github.io/img/default_img.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "LinkLLM Server 对话中断流程设计与实现",
+  "url": "https://lavyoung.github.io/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/",
+  "image": "https://lavyoung.github.io/img/default_img.png",
+  "datePublished": "2026-02-27T06:30:00.000Z",
+  "dateModified": "2026-03-19T14:54:14.444Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Lavigne-yang",
+      "url": "https://lavyoung.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/blog-black.svg"><link rel="canonical" href="https://lavyoung.github.io/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: {"defaultEncoding":2,"translateDelay":0,"msgToTraditionalChinese":"繁","msgToSimplifiedChinese":"簡"},
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '天',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'LinkLLM Server 对话中断流程设计与实现',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="bg-animation" id="web_bg" style="background-image: url(/img/top_img.jpg);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">22</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">10</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">4</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/default_img.png);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/img/blog-black.svg" alt="Logo"><span class="site-name">Lavigne-yang.Blog</span></a><a class="nav-page-title" href="/"><span class="site-name">LinkLLM Server 对话中断流程设计与实现</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">LinkLLM Server 对话中断流程设计与实现</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-02-27T06:30:00.000Z" title="发表于 2026-02-27 14:30:00">2026-02-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-03-19T14:54:14.444Z" title="更新于 2026-03-19 22:54:14">2026-03-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI/">AI</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">2.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>9分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>在构建 LLM 服务网关时，流式响应（SSE）已经成为标配功能。用户可以实时看到 AI 的生成过程，获得更好的交互体验。然而，流式响应也带来了新的挑战：如何优雅地处理用户中断？如何在网络断开时正确清理资源？如何保证中断时已生成的内容不丢失？</p>
+<p>本文将分享 LinkLLM 项目中对话中断流程的设计与实现，介绍如何构建一个企业级的流式对话中断机制。</p>
+<h2 id="问题背景"><a href="#问题背景" class="headerlink" title="问题背景"></a>问题背景</h2><h3 id="流式对话的中断场景"><a href="#流式对话的中断场景" class="headerlink" title="流式对话的中断场景"></a>流式对话的中断场景</h3><p>在实际生产环境中，流式对话面临多种中断场景：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│                     流式对话中断场景                          │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  场景1: 用户主动中断                                         │</span><br><span class="line">│  用户点击停止按钮 → 需要立即停止生成                          │</span><br><span class="line">│                                                             │</span><br><span class="line">│  场景2: 网络超时/断开                                        │</span><br><span class="line">│  网络中断 → 需要检测并清理资源                                │</span><br><span class="line">│                                                             │</span><br><span class="line">│  场景3: 服务端异常                                           │</span><br><span class="line">│  LLM API 错误 → 需要优雅降级                                 │</span><br><span class="line">│                                                             │</span><br><span class="line">│  场景4: 超时控制                                             │</span><br><span class="line">│  生成超时 → 需要超时熔断                                     │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="现有系统的问题"><a href="#现有系统的问题" class="headerlink" title="现有系统的问题"></a>现有系统的问题</h3><p>在实现中断功能之前，我们的系统存在以下问题：</p>
+<table>
+<thead>
+<tr>
+<th>问题</th>
+<th>影响</th>
+<th>严重程度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>无法响应中断</td>
+<td>用户点击停止无效果</td>
+<td>严重</td>
+</tr>
+<tr>
+<td>客户端断开未检测</td>
+<td>资源泄漏、持续计费</td>
+<td>严重</td>
+</tr>
+<tr>
+<td>内容丢失</td>
+<td>数据不完整</td>
+<td>中等</td>
+</tr>
+<tr>
+<td>LLM 调用未取消</td>
+<td>不必要的 API 费用</td>
+<td>严重</td>
+</tr>
+</tbody></table>
+<h2 id="架构设计"><a href="#架构设计" class="headerlink" title="架构设计"></a>架构设计</h2><h3 id="整体架构"><a href="#整体架构" class="headerlink" title="整体架构"></a>整体架构</h3><p>我们采用分层架构，将中断处理逻辑与业务逻辑分离：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    分层架构图                                │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  Presentation Layer (表示层)                                │</span><br><span class="line">│    ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │</span><br><span class="line">│    │ ChatRouter  │  │ AbortRouter │  │  SSEHandler │       │</span><br><span class="line">│    └──────┬──────┘  └──────┬──────┘  └──────┬──────┘       │</span><br><span class="line">├───────────┼────────────────┼────────────────┼───────────────┤</span><br><span class="line">│  Application Layer (应用层)                                 │</span><br><span class="line">│    ┌─────────────────────────────────────────────────┐     │</span><br><span class="line">│    │              StreamOrchestrator                  │     │</span><br><span class="line">│    └────────────────────────┬────────────────────────┘     │</span><br><span class="line">│    ┌─────────────┐  ┌───────▼───────┐  ┌─────────────┐     │</span><br><span class="line">│    │AbortManager │  │ContentBuffer  │  │AbortStrategy│     │</span><br><span class="line">│    └─────────────┘  └───────────────┘  └─────────────┘     │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  Domain Layer (领域层)                                      │</span><br><span class="line">│    ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │</span><br><span class="line">│    │StreamSession│  │ AbortEvent  │  │StreamContext│       │</span><br><span class="line">│    └─────────────┘  └─────────────┘  └─────────────┘       │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="核心设计模式"><a href="#核心设计模式" class="headerlink" title="核心设计模式"></a>核心设计模式</h3><p><strong>策略模式</strong> 用于不同类型的中断行为：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">class</span> <span class="title class_">AbortStrategy</span>(<span class="title class_ inherited__">ABC</span>):</span><br><span class="line"><span class="meta">    @abstractmethod</span></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">should_stop</span>(<span class="params">self, session: StreamSession</span>) -&gt; <span class="built_in">bool</span>:</span><br><span class="line">        <span class="keyword">pass</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">ImmediateAbortStrategy</span>(<span class="title class_ inherited__">AbortStrategy</span>):</span><br><span class="line">    <span class="string">&quot;&quot;&quot;立即中断 - 响应最快&quot;&quot;&quot;</span></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">should_stop</span>(<span class="params">self, session</span>) -&gt; <span class="built_in">bool</span>:</span><br><span class="line">        <span class="keyword">return</span> session.abort_requested</span><br><span class="line"></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">TimeoutAbortStrategy</span>(<span class="title class_ inherited__">AbortStrategy</span>):</span><br><span class="line">    <span class="string">&quot;&quot;&quot;超时中断 - 资源保护&quot;&quot;&quot;</span></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">should_stop</span>(<span class="params">self, session</span>) -&gt; <span class="built_in">bool</span>:</span><br><span class="line">        <span class="keyword">return</span> session.elapsed_seconds &gt;= session.timeout</span><br></pre></td></tr></table></figure>
+
+<p><strong>观察者模式</strong> 用于中断事件通知：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">class</span> <span class="title class_">AbortEventPublisher</span>:</span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">__init__</span>(<span class="params">self</span>):</span><br><span class="line">        <span class="variable language_">self</span>._listeners: <span class="type">List</span>[AbortListener] = []</span><br><span class="line"></span><br><span class="line">    <span class="keyword">async</span> <span class="keyword">def</span> <span class="title function_">notify</span>(<span class="params">self, event: AbortEvent</span>):</span><br><span class="line">        <span class="keyword">for</span> listener <span class="keyword">in</span> <span class="variable language_">self</span>._listeners:</span><br><span class="line">            <span class="keyword">await</span> listener.on_abort(event)</span><br></pre></td></tr></table></figure>
+
+<h2 id="核心实现"><a href="#核心实现" class="headerlink" title="核心实现"></a>核心实现</h2><h3 id="AbortManager-中断状态管理器"><a href="#AbortManager-中断状态管理器" class="headerlink" title="AbortManager - 中断状态管理器"></a>AbortManager - 中断状态管理器</h3><p><code>AbortManager</code> 是整个中断系统的核心，采用单例模式管理所有活跃的流式会话：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">class</span> <span class="title class_">AbortManager</span>:</span><br><span class="line">    <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">    中断状态管理器 - 单例模式</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">    线程安全的流式会话管理，支持：</span></span><br><span class="line"><span class="string">    1. 注册/注销流式会话</span></span><br><span class="line"><span class="string">    2. 响应中断请求</span></span><br><span class="line"><span class="string">    3. 查询会话状态</span></span><br><span class="line"><span class="string">    4. 管理内容缓冲</span></span><br><span class="line"><span class="string">    &quot;&quot;&quot;</span></span><br><span class="line"></span><br><span class="line">    _instance: <span class="type">Optional</span>[AbortManager] = <span class="literal">None</span></span><br><span class="line">    _initialized: <span class="built_in">bool</span> = <span class="literal">False</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">__new__</span>(<span class="params">cls</span>) -&gt; AbortManager:</span><br><span class="line">        <span class="keyword">if</span> cls._instance <span class="keyword">is</span> <span class="literal">None</span>:</span><br><span class="line">            cls._instance = <span class="built_in">super</span>().__new__(cls)</span><br><span class="line">        <span class="keyword">return</span> cls._instance</span><br><span class="line"></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">__init__</span>(<span class="params">self</span>) -&gt; <span class="literal">None</span>:</span><br><span class="line">        <span class="keyword">if</span> AbortManager._initialized:</span><br><span class="line">            <span class="keyword">return</span></span><br><span class="line">        AbortManager._initialized = <span class="literal">True</span></span><br><span class="line">        <span class="variable language_">self</span>._sessions: <span class="built_in">dict</span>[<span class="built_in">str</span>, StreamSession] = &#123;&#125;</span><br><span class="line">        <span class="variable language_">self</span>._lock = asyncio.Lock()</span><br><span class="line">        <span class="variable language_">self</span>._max_sessions: <span class="built_in">int</span> = <span class="number">10000</span></span><br></pre></td></tr></table></figure>
+
+<p>关键方法实现：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">async</span> <span class="keyword">def</span> <span class="title function_">register</span>(<span class="params"></span></span><br><span class="line"><span class="params">    self,</span></span><br><span class="line"><span class="params">    session_id: <span class="built_in">str</span>,</span></span><br><span class="line"><span class="params">    user_id: <span class="built_in">str</span>,</span></span><br><span class="line"><span class="params">    task: asyncio.Task,</span></span><br><span class="line"><span class="params">    timeout: <span class="built_in">int</span> = <span class="number">60</span>,</span></span><br><span class="line"><span class="params"></span>) -&gt; StreamSession:</span><br><span class="line">    <span class="string">&quot;&quot;&quot;注册新的流式会话&quot;&quot;&quot;</span></span><br><span class="line">    <span class="keyword">async</span> <span class="keyword">with</span> <span class="variable language_">self</span>._lock:</span><br><span class="line">        <span class="comment"># 如果已有活跃会话，先取消</span></span><br><span class="line">        <span class="keyword">if</span> session_id <span class="keyword">in</span> <span class="variable language_">self</span>._sessions:</span><br><span class="line">            old_session = <span class="variable language_">self</span>._sessions[session_id]</span><br><span class="line">            <span class="keyword">if</span> old_session.is_active:</span><br><span class="line">                old_session.task.cancel()</span><br><span class="line"></span><br><span class="line">        session = StreamSession(</span><br><span class="line">            session_id=session_id,</span><br><span class="line">            user_id=user_id,</span><br><span class="line">            task=task,</span><br><span class="line">            status=StreamStatus.PENDING,</span><br><span class="line">            timeout=timeout,</span><br><span class="line">        )</span><br><span class="line">        <span class="variable language_">self</span>._sessions[session_id] = session</span><br><span class="line">        <span class="keyword">return</span> session</span><br><span class="line"></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">should_abort</span>(<span class="params">self, session_id: <span class="built_in">str</span></span>) -&gt; <span class="built_in">bool</span>:</span><br><span class="line">    <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">    检查是否应该中断（非阻塞）</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">    关键点：这是&quot;快速检查&quot;方法</span></span><br><span class="line"><span class="string">    - 不加锁，确保 O(1) 时间复杂度</span></span><br><span class="line"><span class="string">    - 供流式生成循环频繁调用（每个 chunk）</span></span><br><span class="line"><span class="string">    - 目标响应时间 &lt; 200ms</span></span><br><span class="line"><span class="string">    &quot;&quot;&quot;</span></span><br><span class="line">    session = <span class="variable language_">self</span>._sessions.get(session_id)</span><br><span class="line">    <span class="keyword">if</span> session <span class="keyword">is</span> <span class="literal">None</span>:</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">True</span>  <span class="comment"># 会话不存在，应该停止</span></span><br><span class="line">    <span class="keyword">return</span> session.abort_requested</span><br></pre></td></tr></table></figure>
+
+<h3 id="StreamSession-流式会话状态"><a href="#StreamSession-流式会话状态" class="headerlink" title="StreamSession - 流式会话状态"></a>StreamSession - 流式会话状态</h3><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@dataclass</span></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">StreamSession</span>:</span><br><span class="line">    <span class="string">&quot;&quot;&quot;流式会话状态&quot;&quot;&quot;</span></span><br><span class="line">    session_id: <span class="built_in">str</span></span><br><span class="line">    user_id: <span class="built_in">str</span></span><br><span class="line">    task: asyncio.Task</span><br><span class="line">    status: StreamStatus = StreamStatus.PENDING</span><br><span class="line">    start_time: datetime = field(default_factory=datetime.now)</span><br><span class="line">    abort_requested: <span class="built_in">bool</span> = <span class="literal">False</span></span><br><span class="line">    abort_reason: <span class="type">Optional</span>[AbortReason] = <span class="literal">None</span></span><br><span class="line">    content_buffer: ContentBuffer = field(default_factory=ContentBuffer)</span><br><span class="line">    timeout: <span class="built_in">int</span> = <span class="number">60</span></span><br><span class="line"></span><br><span class="line"><span class="meta">    @property</span></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">elapsed_seconds</span>(<span class="params">self</span>) -&gt; <span class="built_in">float</span>:</span><br><span class="line">        <span class="string">&quot;&quot;&quot;已运行时间（秒）&quot;&quot;&quot;</span></span><br><span class="line">        <span class="keyword">return</span> (datetime.now() - <span class="variable language_">self</span>.start_time).total_seconds()</span><br><span class="line"></span><br><span class="line"><span class="meta">    @property</span></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">is_active</span>(<span class="params">self</span>) -&gt; <span class="built_in">bool</span>:</span><br><span class="line">        <span class="string">&quot;&quot;&quot;是否处于活跃状态&quot;&quot;&quot;</span></span><br><span class="line">        <span class="keyword">return</span> <span class="variable language_">self</span>.status <span class="keyword">in</span> (StreamStatus.PENDING, StreamStatus.GENERATING)</span><br></pre></td></tr></table></figure>
+
+<h3 id="状态机设计"><a href="#状态机设计" class="headerlink" title="状态机设计"></a>状态机设计</h3><p>流式会话的状态流转遵循严格的状态机：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line">                      register()</span><br><span class="line">                         │</span><br><span class="line">                         ▼</span><br><span class="line">                  ┌──────────────┐</span><br><span class="line">                  │   PENDING    │</span><br><span class="line">                  └──────┬───────┘</span><br><span class="line">                         │</span><br><span class="line">                  stream_start()</span><br><span class="line">                         │</span><br><span class="line">                         ▼</span><br><span class="line">       ┌─────────┌──────────────┐─────────┐</span><br><span class="line">       │         │ GENERATING   │         │</span><br><span class="line">       │         └──────┬───────┘         │</span><br><span class="line">       │                │                 │</span><br><span class="line">error  │        abort_requested   stream_done</span><br><span class="line">       │                │                 │</span><br><span class="line">       ▼                ▼                 ▼</span><br><span class="line">┌──────────────┐ ┌──────────────┐ ┌──────────────┐</span><br><span class="line">│    ERROR     │ │   ABORTING   │ │  COMPLETED   │</span><br><span class="line">└──────┬───────┘ └──────┬───────┘ └──────┬───────┘</span><br><span class="line">       │         timeout│                │</span><br><span class="line">       │                ▼                │</span><br><span class="line">       │         ┌──────────────┐        │</span><br><span class="line">       └────────►│   TIMEOUT    │◄───────┘</span><br><span class="line">                 └──────┬───────┘</span><br><span class="line">                        │</span><br><span class="line">                 cleanup()</span><br></pre></td></tr></table></figure>
+
+<h3 id="支持中断的流式对话服务"><a href="#支持中断的流式对话服务" class="headerlink" title="支持中断的流式对话服务"></a>支持中断的流式对话服务</h3><p>核心实现是 <code>chat_stream</code> 方法，在每个 chunk 处理时检查中断标志：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">async</span> <span class="keyword">def</span> <span class="title function_">chat_stream</span>(<span class="params"></span></span><br><span class="line"><span class="params">    self,</span></span><br><span class="line"><span class="params">    session_id: <span class="built_in">str</span>,</span></span><br><span class="line"><span class="params">    user_id: <span class="built_in">str</span>,</span></span><br><span class="line"><span class="params">    message: <span class="built_in">str</span>,</span></span><br><span class="line"><span class="params">    timeout: <span class="built_in">int</span> = <span class="number">60</span>,</span></span><br><span class="line"><span class="params"></span>) -&gt; AsyncGenerator[<span class="built_in">str</span>, <span class="literal">None</span>]:</span><br><span class="line">    <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">    支持中断的流式对话</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">    核心流程：</span></span><br><span class="line"><span class="string">    1. 注册会话到中断管理器</span></span><br><span class="line"><span class="string">    2. 循环中检查中断/超时标志</span></span><br><span class="line"><span class="string">    3. 处理中断时保存已生成内容</span></span><br><span class="line"><span class="string">    4. finally 块确保资源清理</span></span><br><span class="line"><span class="string">    &quot;&quot;&quot;</span></span><br><span class="line">    current_task = asyncio.current_task()</span><br><span class="line"></span><br><span class="line">    <span class="comment"># 1. 注册会话</span></span><br><span class="line">    stream_session = <span class="keyword">await</span> abort_manager.register(</span><br><span class="line">        session_id=session_id,</span><br><span class="line">        user_id=user_id,</span><br><span class="line">        task=current_task,</span><br><span class="line">        timeout=timeout,</span><br><span class="line">    )</span><br><span class="line">    abort_manager.mark_generating(session_id)</span><br><span class="line">    start_time = datetime.now()</span><br><span class="line"></span><br><span class="line">    <span class="keyword">try</span>:</span><br><span class="line">        <span class="keyword">async</span> <span class="keyword">for</span> chunk <span class="keyword">in</span> runnable.astream(...):</span><br><span class="line">            elapsed = (datetime.now() - start_time).total_seconds()</span><br><span class="line"></span><br><span class="line">            <span class="comment"># 2. 检查中断标志</span></span><br><span class="line">            <span class="keyword">if</span> abort_manager.should_abort(session_id):</span><br><span class="line">                logger.info(<span class="string">f&quot;检测到中断请求: <span class="subst">&#123;session_id&#125;</span>&quot;</span>)</span><br><span class="line">                <span class="keyword">yield</span> <span class="variable language_">self</span>._make_abort_event(session_id)</span><br><span class="line">                <span class="keyword">break</span></span><br><span class="line"></span><br><span class="line">            <span class="comment"># 3. 检查超时</span></span><br><span class="line">            <span class="keyword">if</span> elapsed &gt;= timeout:</span><br><span class="line">                logger.warning(<span class="string">f&quot;生成超时: <span class="subst">&#123;session_id&#125;</span>&quot;</span>)</span><br><span class="line">                abort_manager.mark_timeout(session_id)</span><br><span class="line">                <span class="keyword">yield</span> <span class="variable language_">self</span>._make_timeout_event(session_id, elapsed, timeout)</span><br><span class="line">                <span class="keyword">break</span></span><br><span class="line"></span><br><span class="line">            <span class="comment"># 4. 超时预警 (90%)</span></span><br><span class="line">            <span class="keyword">if</span> elapsed &gt;= timeout * <span class="number">0.9</span> <span class="keyword">and</span> <span class="keyword">not</span> warning_sent:</span><br><span class="line">                warning_sent = <span class="literal">True</span></span><br><span class="line">                <span class="keyword">yield</span> TimeoutWarningEvent(...).to_sse()</span><br><span class="line"></span><br><span class="line">            <span class="comment"># 5. 处理 chunk</span></span><br><span class="line">            abort_manager.append_content(session_id, chunk.content)</span><br><span class="line">            <span class="keyword">yield</span> create_text_event(chunk.content)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">except</span> asyncio.CancelledError:</span><br><span class="line">        logger.info(<span class="string">f&quot;Stream cancelled: <span class="subst">&#123;session_id&#125;</span>&quot;</span>)</span><br><span class="line">        abort_manager.mark_aborted(session_id)</span><br><span class="line">        <span class="keyword">yield</span> AbortEvent(reason=<span class="string">&quot;cancelled&quot;</span>).to_sse()</span><br><span class="line">        <span class="keyword">raise</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">finally</span>:</span><br><span class="line">        <span class="comment"># 6. 保存已生成内容（关键！）</span></span><br><span class="line">        <span class="keyword">await</span> <span class="variable language_">self</span>._save_partial_content(session_id)</span><br><span class="line">        <span class="comment"># 7. 清理会话</span></span><br><span class="line">        <span class="keyword">await</span> abort_manager.unregister(session_id)</span><br></pre></td></tr></table></figure>
+
+<h3 id="内容保存策略"><a href="#内容保存策略" class="headerlink" title="内容保存策略"></a>内容保存策略</h3><p>中断时保存已生成内容是关键需求，我们通过 <code>finally</code> 块确保执行：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">async</span> <span class="keyword">def</span> <span class="title function_">_save_partial_content</span>(<span class="params">self, session_id: <span class="built_in">str</span></span>) -&gt; <span class="literal">None</span>:</span><br><span class="line">    <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">    保存部分生成的内容</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">    关键点：</span></span><br><span class="line"><span class="string">    - 无论正常完成还是中断，都会保存</span></span><br><span class="line"><span class="string">    - 标记 is_partial 区分完整和部分内容</span></span><br><span class="line"><span class="string">    &quot;&quot;&quot;</span></span><br><span class="line">    session = abort_manager.get_session(session_id)</span><br><span class="line">    <span class="keyword">if</span> <span class="keyword">not</span> session:</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line"></span><br><span class="line">    buffer = abort_manager.get_content_buffer(session_id)</span><br><span class="line">    <span class="keyword">if</span> buffer.is_empty:</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line"></span><br><span class="line">    is_partial = session.status <span class="keyword">in</span> (</span><br><span class="line">        StreamStatus.ABORTED,</span><br><span class="line">        StreamStatus.TIMEOUT,</span><br><span class="line">        StreamStatus.ERROR</span><br><span class="line">    )</span><br><span class="line"></span><br><span class="line">    <span class="variable language_">self</span>.repo.create_message(</span><br><span class="line">        session_id=session_id,</span><br><span class="line">        role=<span class="string">&quot;ai&quot;</span>,</span><br><span class="line">        content=buffer.content,</span><br><span class="line">        token_count=buffer.token_count,</span><br><span class="line">        thinking_content=buffer.thinking <span class="keyword">if</span> buffer.thinking <span class="keyword">else</span> <span class="literal">None</span>,</span><br><span class="line">        is_partial=is_partial,</span><br><span class="line">    )</span><br></pre></td></tr></table></figure>
+
+<h2 id="API-设计"><a href="#API-设计" class="headerlink" title="API 设计"></a>API 设计</h2><h3 id="REST-API-接口"><a href="#REST-API-接口" class="headerlink" title="REST API 接口"></a>REST API 接口</h3><table>
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td>&#x2F;api&#x2F;v1&#x2F;chat&#x2F;completions</td>
+<td>对话补全（支持流式）</td>
+</tr>
+<tr>
+<td>POST</td>
+<td>&#x2F;api&#x2F;v1&#x2F;chat&#x2F;abort</td>
+<td>中断对话</td>
+</tr>
+<tr>
+<td>GET</td>
+<td>&#x2F;api&#x2F;v1&#x2F;chat&#x2F;stream&#x2F;status</td>
+<td>查询流式状态</td>
+</tr>
+<tr>
+<td>POST</td>
+<td>&#x2F;api&#x2F;v1&#x2F;chat&#x2F;stream&#x2F;cancel</td>
+<td>批量取消（管理员）</td>
+</tr>
+</tbody></table>
+<h3 id="中断对话接口"><a href="#中断对话接口" class="headerlink" title="中断对话接口"></a>中断对话接口</h3><figure class="highlight http"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">POST /api/v1/chat/abort</span><br><span class="line"><span class="attribute">Content-Type</span><span class="punctuation">: </span>application/json</span><br><span class="line"><span class="attribute">Authorization</span><span class="punctuation">: </span>Bearer &#123;token&#125;</span><br><span class="line"></span><br><span class="line">&#123;</span><br><span class="line">  &quot;session_id&quot;: &quot;abc123&quot;,</span><br><span class="line">  &quot;save_content&quot;: true</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>响应：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;success&quot;</span><span class="punctuation">:</span> <span class="literal"><span class="keyword">true</span></span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;message&quot;</span><span class="punctuation">:</span> <span class="string">&quot;中断请求已发送&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;session_id&quot;</span><span class="punctuation">:</span> <span class="string">&quot;abc123&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;content_saved&quot;</span><span class="punctuation">:</span> <span class="literal"><span class="keyword">true</span></span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;partial_content_length&quot;</span><span class="punctuation">:</span> <span class="number">150</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;elapsed_seconds&quot;</span><span class="punctuation">:</span> <span class="number">12.5</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="SSE-事件类型"><a href="#SSE-事件类型" class="headerlink" title="SSE 事件类型"></a>SSE 事件类型</h3><table>
+<thead>
+<tr>
+<th>事件类型</th>
+<th>描述</th>
+<th>示例</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>thinking</code></td>
+<td>AI 思考过程</td>
+<td><code>&#123;&quot;type&quot;:&quot;thinking&quot;,&quot;data&quot;:&quot;...&quot;&#125;</code></td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td>正式回复内容</td>
+<td><code>&#123;&quot;type&quot;:&quot;text&quot;,&quot;data&quot;:&quot;你好&quot;&#125;</code></td>
+</tr>
+<tr>
+<td><code>abort</code></td>
+<td>用户中断</td>
+<td><code>&#123;&quot;type&quot;:&quot;abort&quot;,&quot;reason&quot;:&quot;user_request&quot;&#125;</code></td>
+</tr>
+<tr>
+<td><code>timeout</code></td>
+<td>超时中断</td>
+<td><code>&#123;&quot;type&quot;:&quot;timeout&quot;,&quot;elapsed_seconds&quot;:60&#125;</code></td>
+</tr>
+<tr>
+<td><code>timeout_warning</code></td>
+<td>超时预警</td>
+<td><code>&#123;&quot;type&quot;:&quot;timeout_warning&quot;,&quot;remaining_seconds&quot;:6&#125;</code></td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td>错误事件</td>
+<td><code>&#123;&quot;type&quot;:&quot;error&quot;,&quot;error_code&quot;:&quot;LLM_API_ERROR&quot;&#125;</code></td>
+</tr>
+<tr>
+<td><code>close</code></td>
+<td>生成完成</td>
+<td><code>&#123;&quot;type&quot;:&quot;close&quot;,&quot;msg&quot;:&quot;生成完成&quot;&#125;</code></td>
+</tr>
+<tr>
+<td><code>heartbeat</code></td>
+<td>心跳保活</td>
+<td><code>&#123;&quot;type&quot;:&quot;heartbeat&quot;,&quot;msg&quot;:&quot;ping&quot;&#125;</code></td>
+</tr>
+</tbody></table>
+<h2 id="中断时序图"><a href="#中断时序图" class="headerlink" title="中断时序图"></a>中断时序图</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">Client                 Server                 AbortManager     LLM</span><br><span class="line">  │                      │                         │            │</span><br><span class="line">  │  POST /completions   │                         │            │</span><br><span class="line">  │  stream=true         │                         │            │</span><br><span class="line">  │─────────────────────►│                         │            │</span><br><span class="line">  │                      │   register(session)     │            │</span><br><span class="line">  │                      │────────────────────────►│            │</span><br><span class="line">  │  SSE: text events    │                         │            │</span><br><span class="line">  │◄─────────────────────│◄────────────────────────│◄───────────│</span><br><span class="line">  │                      │                         │            │</span><br><span class="line">  │  POST /abort         │                         │            │</span><br><span class="line">  │─────────────────────►│                         │            │</span><br><span class="line">  │                      │   request_abort()       │            │</span><br><span class="line">  │                      │────────────────────────►│            │</span><br><span class="line">  │                      │   abort_requested=true  │            │</span><br><span class="line">  │                      │◄────────────────────────│            │</span><br><span class="line">  │  SSE: abort event    │                         │            │</span><br><span class="line">  │◄─────────────────────│◄────────────────────────│            │</span><br><span class="line">  │                      │   unregister(session)   │            │</span><br><span class="line">  │                      │────────────────────────►│            │</span><br></pre></td></tr></table></figure>
+
+<h2 id="最佳实践总结"><a href="#最佳实践总结" class="headerlink" title="最佳实践总结"></a>最佳实践总结</h2><h3 id="中断响应优化"><a href="#中断响应优化" class="headerlink" title="中断响应优化"></a>中断响应优化</h3><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># should_abort() 方法不加锁，直接读取内存标志位</span></span><br><span class="line"><span class="comment"># 时间复杂度: O(1)，响应延迟: &lt; 1ms</span></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">should_abort</span>(<span class="params">self, session_id: <span class="built_in">str</span></span>) -&gt; <span class="built_in">bool</span>:</span><br><span class="line">    session = <span class="variable language_">self</span>._sessions.get(session_id)</span><br><span class="line">    <span class="keyword">return</span> session.abort_requested <span class="keyword">if</span> session <span class="keyword">else</span> <span class="literal">True</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="资源清理保证"><a href="#资源清理保证" class="headerlink" title="资源清理保证"></a>资源清理保证</h3><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 正确做法：使用 finally 确保清理</span></span><br><span class="line"><span class="keyword">try</span>:</span><br><span class="line">    <span class="keyword">async</span> <span class="keyword">for</span> chunk <span class="keyword">in</span> runnable.astream(...):</span><br><span class="line">        <span class="keyword">if</span> should_abort():</span><br><span class="line">            <span class="keyword">yield</span> abort_event</span><br><span class="line">            <span class="keyword">break</span></span><br><span class="line">        <span class="keyword">yield</span> chunk_event</span><br><span class="line"><span class="keyword">finally</span>:</span><br><span class="line">    <span class="keyword">await</span> save_content()      <span class="comment"># 无论如何都保存</span></span><br><span class="line">    <span class="keyword">await</span> cleanup_session()   <span class="comment"># 无论如何都清理</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="性能指标"><a href="#性能指标" class="headerlink" title="性能指标"></a>性能指标</h3><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>时间复杂度</th>
+<th>锁竞争</th>
+<th>建议</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>should_abort()</code></td>
+<td>O(1)</td>
+<td>无</td>
+<td>每个chunk调用</td>
+</tr>
+<tr>
+<td><code>append_content()</code></td>
+<td>O(1)</td>
+<td>无</td>
+<td>每个chunk调用</td>
+</tr>
+<tr>
+<td><code>request_abort()</code></td>
+<td>O(1)</td>
+<td>有</td>
+<td>独立HTTP请求</td>
+</tr>
+<tr>
+<td><code>register()</code></td>
+<td>O(1)</td>
+<td>有</td>
+<td>会话开始时</td>
+</tr>
+</tbody></table>
+<h2 id="后续优化方向"><a href="#后续优化方向" class="headerlink" title="后续优化方向"></a>后续优化方向</h2><ol>
+<li><strong>心跳检测</strong>：添加 HeartbeatMonitor 主动检测客户端断开</li>
+<li><strong>集群支持</strong>：实现 RedisAbortManager 支持分布式部署</li>
+<li><strong>统计指标</strong>：添加 Prometheus 指标导出</li>
+<li><strong>重试机制</strong>：LLM API 错误时自动重试</li>
+</ol>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>本文介绍了 LinkLLM Server 中对话中断流程的设计与实现。通过 AbortManager 统一管理流式会话状态，结合状态机模式控制会话生命周期，使用 finally 块确保资源清理和内容保存，实现了响应时间 &lt; 200ms 的中断机制。</p>
+<p>核心设计要点：</p>
+<ul>
+<li>单例模式管理全局会话状态</li>
+<li>非阻塞检查实现快速中断响应</li>
+<li>finally 块保证资源清理和内容保存</li>
+<li>状态机严格控制状态转换</li>
+</ul>
+<p>这套方案已经在生产环境中稳定运行，有效解决了流式对话的中断问题。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://lavyoung.github.io">Lavigne-yang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://lavyoung.github.io/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/">https://lavyoung.github.io/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://lavyoung.github.io" target="_blank">Lavigne-yang.Blog</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/python/">Python</a><a class="post-meta__tags" href="/tags/FastAPI/">FastAPI</a><a class="post-meta__tags" href="/tags/SSE/">SSE</a><a class="post-meta__tags" href="/tags/%E5%BC%82%E6%AD%A5%E7%BC%96%E7%A8%8B/">异步编程</a></div><div class="post-share"><div class="social-share" data-image="/img/default_img.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2025/06/09/SpringBoot%E5%90%AF%E5%8A%A8%E5%8E%9F%E7%90%86%E8%A7%A3%E6%9E%90/" title="SpringBoot启动原理解析"><img class="cover" src="/img/article/nasa_the_blue_marble.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">SpringBoot启动原理解析</div></div><div class="info-2"><div class="info-item-1">核心流程  启动入口：SpringApplication.run() 创建 SpringApplication 实例，初始化 ApplicationContext（默认 AnnotationConfigApplicationContext）。 加载 META-INF/spring.factories 中的 ApplicationContextInitializer 和 ApplicationListener。   准备环境（Environment） 读取默认配置application.yml及命令行参数。 配置 Profiles``prod）。   创建并刷新 ApplicationContext 调用 AbstractApplicationContext.refresh()，核心流程： Bean 定义加载：扫描 @Component、@Service 等注解类。 Bean 实例化：通过 BeanFactory 创建单例 Bean。 依赖注入：处理 @Autowired、@Resource 等注解。 初始化回调：执行 @PostConstruct、InitializingBean...</div></div></div></a></nav><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="giscus-wrap"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Lavigne-yang</div><div class="author-info-description">专注于知识积累</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">22</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">10</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">4</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Lavigne-yang"><i class="fab fa-github"></i><span>关注</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Lavigne-yang" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:lavyoung1325@outlook.com" target="_blank" title="Email"><i class="fas fa-envelope" style="color: #22205e;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">如有不足，欢迎斧正[抱拳]</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%97%AE%E9%A2%98%E8%83%8C%E6%99%AF"><span class="toc-number">2.</span> <span class="toc-text">问题背景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B5%81%E5%BC%8F%E5%AF%B9%E8%AF%9D%E7%9A%84%E4%B8%AD%E6%96%AD%E5%9C%BA%E6%99%AF"><span class="toc-number">2.1.</span> <span class="toc-text">流式对话的中断场景</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%8E%B0%E6%9C%89%E7%B3%BB%E7%BB%9F%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">2.2.</span> <span class="toc-text">现有系统的问题</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1"><span class="toc-number">3.</span> <span class="toc-text">架构设计</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84"><span class="toc-number">3.1.</span> <span class="toc-text">整体架构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E8%AE%BE%E8%AE%A1%E6%A8%A1%E5%BC%8F"><span class="toc-number">3.2.</span> <span class="toc-text">核心设计模式</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%AE%9E%E7%8E%B0"><span class="toc-number">4.</span> <span class="toc-text">核心实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#AbortManager-%E4%B8%AD%E6%96%AD%E7%8A%B6%E6%80%81%E7%AE%A1%E7%90%86%E5%99%A8"><span class="toc-number">4.1.</span> <span class="toc-text">AbortManager - 中断状态管理器</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#StreamSession-%E6%B5%81%E5%BC%8F%E4%BC%9A%E8%AF%9D%E7%8A%B6%E6%80%81"><span class="toc-number">4.2.</span> <span class="toc-text">StreamSession - 流式会话状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%8A%B6%E6%80%81%E6%9C%BA%E8%AE%BE%E8%AE%A1"><span class="toc-number">4.3.</span> <span class="toc-text">状态机设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%94%AF%E6%8C%81%E4%B8%AD%E6%96%AD%E7%9A%84%E6%B5%81%E5%BC%8F%E5%AF%B9%E8%AF%9D%E6%9C%8D%E5%8A%A1"><span class="toc-number">4.4.</span> <span class="toc-text">支持中断的流式对话服务</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%86%85%E5%AE%B9%E4%BF%9D%E5%AD%98%E7%AD%96%E7%95%A5"><span class="toc-number">4.5.</span> <span class="toc-text">内容保存策略</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#API-%E8%AE%BE%E8%AE%A1"><span class="toc-number">5.</span> <span class="toc-text">API 设计</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#REST-API-%E6%8E%A5%E5%8F%A3"><span class="toc-number">5.1.</span> <span class="toc-text">REST API 接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%AD%E6%96%AD%E5%AF%B9%E8%AF%9D%E6%8E%A5%E5%8F%A3"><span class="toc-number">5.2.</span> <span class="toc-text">中断对话接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#SSE-%E4%BA%8B%E4%BB%B6%E7%B1%BB%E5%9E%8B"><span class="toc-number">5.3.</span> <span class="toc-text">SSE 事件类型</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%AD%E6%96%AD%E6%97%B6%E5%BA%8F%E5%9B%BE"><span class="toc-number">6.</span> <span class="toc-text">中断时序图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5%E6%80%BB%E7%BB%93"><span class="toc-number">7.</span> <span class="toc-text">最佳实践总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%AD%E6%96%AD%E5%93%8D%E5%BA%94%E4%BC%98%E5%8C%96"><span class="toc-number">7.1.</span> <span class="toc-text">中断响应优化</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B5%84%E6%BA%90%E6%B8%85%E7%90%86%E4%BF%9D%E8%AF%81"><span class="toc-number">7.2.</span> <span class="toc-text">资源清理保证</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%80%A7%E8%83%BD%E6%8C%87%E6%A0%87"><span class="toc-number">7.3.</span> <span class="toc-text">性能指标</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%90%8E%E7%BB%AD%E4%BC%98%E5%8C%96%E6%96%B9%E5%90%91"><span class="toc-number">8.</span> <span class="toc-text">后续优化方向</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">9.</span> <span class="toc-text">总结</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/" title="LinkLLM Server 对话中断流程设计与实现"><img src="/img/default_img.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="LinkLLM Server 对话中断流程设计与实现"/></a><div class="content"><a class="title" href="/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/" title="LinkLLM Server 对话中断流程设计与实现">LinkLLM Server 对话中断流程设计与实现</a><time datetime="2026-02-27T06:30:00.000Z" title="发表于 2026-02-27 14:30:00">2026-02-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/06/09/Nacos%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86%EF%BC%88%E4%B8%80%EF%BC%89/" title="Nacos基本原理（一）"><img src="/img/article/nasa_the_blue_marble.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Nacos基本原理（一）"/></a><div class="content"><a class="title" href="/2025/06/09/Nacos%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86%EF%BC%88%E4%B8%80%EF%BC%89/" title="Nacos基本原理（一）">Nacos基本原理（一）</a><time datetime="2025-06-09T12:14:21.000Z" title="发表于 2025-06-09 20:14:21">2025-06-09</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/06/09/SpringBoot%E5%90%AF%E5%8A%A8%E5%8E%9F%E7%90%86%E8%A7%A3%E6%9E%90/" title="SpringBoot启动原理解析"><img src="/img/article/nasa_the_blue_marble.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="SpringBoot启动原理解析"/></a><div class="content"><a class="title" href="/2025/06/09/SpringBoot%E5%90%AF%E5%8A%A8%E5%8E%9F%E7%90%86%E8%A7%A3%E6%9E%90/" title="SpringBoot启动原理解析">SpringBoot启动原理解析</a><time datetime="2025-06-09T12:14:21.000Z" title="发表于 2025-06-09 20:14:21">2025-06-09</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/05/28/%E4%B8%9A%E5%8A%A1%E5%9C%BA%E6%99%AF/" title="业务方案总结"><img src="/img/article/nasa_the_blue_marble.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="业务方案总结"/></a><div class="content"><a class="title" href="/2025/05/28/%E4%B8%9A%E5%8A%A1%E5%9C%BA%E6%99%AF/" title="业务方案总结">业务方案总结</a><time datetime="2025-05-28T09:24:23.000Z" title="发表于 2025-05-28 17:24:23">2025-05-28</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/04/11/LeetCode%E7%AE%97%E6%B3%95%E9%A2%98%EF%BC%88%E4%BA%8C%EF%BC%89/" title="算法热题（二）"><img src="/img/default_img.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="算法热题（二）"/></a><div class="content"><a class="title" href="/2025/04/11/LeetCode%E7%AE%97%E6%B3%95%E9%A2%98%EF%BC%88%E4%BA%8C%EF%BC%89/" title="算法热题（二）">算法热题（二）</a><time datetime="2025-04-11T09:24:23.000Z" title="发表于 2025-04-11 17:24:23">2025-04-11</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2022 - 2026 By Lavigne-yang</span></div><div class="footer_custom_text">Hi, welcome to my <a target="_blank" rel="noopener" href="https://Lavigne-yang.github.io">blog</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="translateLink" type="button" title="简繁转换">繁</button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="/js/tw_cn.js"></script><div class="js-pjax"><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const getGiscusTheme = theme => theme === 'dark' ? 'dark' : 'light'
+
+  const createScriptElement = config => {
+    const ele = document.createElement('script')
+    Object.entries(config).forEach(([key, value]) => {
+      ele.setAttribute(key, value)
+    })
+    return ele
+  }
+
+  const loadGiscus = (el = document, key) => {
+    const mappingConfig = isShuoshuo
+      ? { 'data-mapping': 'specific', 'data-term': key }
+      : { 'data-mapping': (option && option['data-mapping']) || 'pathname' }
+
+    const giscusConfig = {
+      src: 'https://giscus.app/client.js',
+      'data-repo': 'Lavigne-yang/giscus_comments',
+      'data-repo-id': 'R_kgDOOyjQAA',
+      'data-category-id': 'DIC_kwDOOyjQAM4Cqumv',
+      'data-theme': getGiscusTheme(document.documentElement.getAttribute('data-theme')),
+      'data-reactions-enabled': '1',
+      crossorigin: 'anonymous',
+      async: true,
+      ...option,
+      ...mappingConfig
+    }
+
+    const scriptElement = createScriptElement(giscusConfig)
+
+    el.querySelector('#giscus-wrap').appendChild(scriptElement)
+
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGiscus = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+  }
+
+  const changeGiscusTheme = theme => {
+    const iframe = document.querySelector('#giscus-wrap iframe')
+    if (iframe) {
+      const message = {
+        giscus: {
+          setConfig: {
+            theme: getGiscusTheme(theme)
+          }
+        }
+      }
+      iframe.contentWindow.postMessage(message, 'https://giscus.app')
+    }
+  }
+
+  btf.addGlobalFn('themeChange', changeGiscusTheme, 'giscus')
+
+  if (isShuoshuo) {
+    'Giscus' === 'Giscus'
+      ? window.shuoshuoComment = { loadComment: loadGiscus }
+      : window.loadOtherComment = loadGiscus
+    return
+  }
+
+  if ('Giscus' === 'Giscus' || !true) {
+    if (true) btf.loadComment(document.getElementById('giscus-wrap'), loadGiscus)
+    else loadGiscus()
+  } else {
+    window.loadOtherComment = loadGiscus
+  }
+})()</script></div><script defer="defer" id="fluttering_ribbon" mobile="true" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-fluttering-ribbon.min.js"></script><script async data-pjax src="https://cdn.bootcdn.net/ajax/libs/busuanzi/2.3.0/bsz.pure.mini.js"></script></div></body></html>
