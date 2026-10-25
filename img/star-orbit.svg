@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">星轨节点</title>
+  <desc id="desc">围绕知识星核连接的三个分布式节点</desc>
+  <g fill="none" stroke="#4f46e5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.5 39.5C14 24 27 14.5 42.5 14.5" stroke-width="3.6"/>
+    <path d="M18 49.5C33 55 49 45.5 53.5 30" stroke-width="3.6"/>
+    <path d="M12 41.5C24.5 47.5 45.5 42.5 54.5 27" stroke-width="2.4" opacity=".72"/>
+  </g>
+  <g fill="#4f46e5">
+    <circle cx="10.5" cy="39.5" r="4.2"/>
+    <circle cx="42.5" cy="14.5" r="4.2"/>
+    <circle cx="53.5" cy="30" r="4.2"/>
+    <path d="M32 20.5c1.2 6.6 4.9 10.3 11.5 11.5C36.9 33.2 33.2 36.9 32 43.5 30.8 36.9 27.1 33.2 20.5 32 27.1 30.8 30.8 27.1 32 20.5Z"/>
+  </g>
+</svg>
