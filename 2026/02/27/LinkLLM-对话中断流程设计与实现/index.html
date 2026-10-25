@@ -9,8 +9,8 @@
 <meta property="article:published_time" content="2026-02-27T06:30:00.000Z">
 <meta property="article:modified_time" content="2026-03-19T14:54:14.444Z">
 <meta property="article:author" content="Lavigne-yang">
-<meta property="article:tag" content="Python">
 <meta property="article:tag" content="FastAPI">
+<meta property="article:tag" content="Python">
 <meta property="article:tag" content="SSE">
 <meta property="article:tag" content="异步编程">
 <meta name="twitter:card" content="summary">
@@ -34,46 +34,87 @@
       
     const saveToLocal = {
       set: (key, value, ttl) => {
-        if (!ttl) return
-        const expiry = Date.now() + ttl * 86400000
-        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+        const data = { value }
+
+        if (ttl != null) {
+          data.expiry = Date.now() + ttl * 86400000
+        }
+
+        localStorage.setItem(key, JSON.stringify(data))
       },
       get: key => {
         const itemStr = localStorage.getItem(key)
-        if (!itemStr) return undefined
-        const { value, expiry } = JSON.parse(itemStr)
-        if (Date.now() > expiry) {
+        if (!itemStr) return
+
+        try {
+          const data = JSON.parse(itemStr)
+
+          if (data.expiry && Date.now() > data.expiry) {
+            localStorage.removeItem(key)
+            return
+          }
+
+          return data.value
+        } catch {
           localStorage.removeItem(key)
-          return undefined
         }
-        return value
       }
     }
 
+    const scriptCache = new Map()
+    const cssCache = new Map()
     window.btf = {
       saveToLocal,
-      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
-        const script = document.createElement('script')
-        script.src = url
-        script.async = true
-        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
-        script.onload = script.onreadystatechange = () => {
-          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+      getScript: (url, attr = {}) => {
+        if (scriptCache.has(url)) {
+          return scriptCache.get(url)
         }
-        script.onerror = reject
-        document.head.appendChild(script)
-      }),
-      getCSS: (url, id) => new Promise((resolve, reject) => {
-        const link = document.createElement('link')
-        link.rel = 'stylesheet'
-        link.href = url
-        if (id) link.id = id
-        link.onload = link.onreadystatechange = () => {
-          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+
+        const promise = new Promise((resolve, reject) => {
+          const script = document.createElement('script')
+
+          script.src = url
+          script.async = true
+
+          for (const key in attr) {
+            script.setAttribute(key, attr[key])
+          }
+
+          script.onload = resolve
+          script.onerror = reject
+
+          document.head.appendChild(script)
+        })
+
+        scriptCache.set(url, promise)
+
+        return promise
+      },
+      getCSS: (url, id) => {
+        if (cssCache.has(url)) {
+          return cssCache.get(url)
         }
-        link.onerror = reject
-        document.head.appendChild(link)
-      }),
+
+        const promise = new Promise((resolve, reject) => {
+          const link = document.createElement('link')
+
+          link.rel = 'stylesheet'
+          link.href = url
+
+          if (id) {
+            link.id = id
+          }
+
+          link.onload = resolve
+          link.onerror = reject
+
+          document.head.appendChild(link)
+        })
+
+        cssCache.set(url, promise)
+
+        return promise
+      },
       addGlobalFn: (key, fn, name = false, parent = window) => {
         if (!false && key.startsWith('pjax')) return
         const globalFn = parent.globalFn || {}
@@ -84,16 +125,17 @@
     }
   
       
+      const metaThemeColor = document.querySelector('meta[name="theme-color"]')
       const activateDarkMode = () => {
-        document.documentElement.setAttribute('data-theme', 'dark')
-        if (document.querySelector('meta[name="theme-color"]') !== null) {
-          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        document.documentElement.dataset.theme = 'dark'
+        if (metaThemeColor !== null) {
+          metaThemeColor.setAttribute('content', '#0d0d0d')
         }
       }
       const activateLightMode = () => {
-        document.documentElement.setAttribute('data-theme', 'light')
-        if (document.querySelector('meta[name="theme-color"]') !== null) {
-          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'ffffff')
+        document.documentElement.dataset.theme = 'light'
+        if (metaThemeColor !== null) {
+          metaThemeColor.setAttribute('content', 'ffffff')
         }
       }
 
@@ -162,7 +204,7 @@
   isHighlightShrink: false,
   isToc: true,
   pageType: 'post'
-}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="bg-animation" id="web_bg" style="background-image: url(/img/top_img.jpg);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">22</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">10</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">4</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/default_img.png);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/img/blog-black.svg" alt="Logo"><span class="site-name">Lavigne-yang.Blog</span></a><a class="nav-page-title" href="/"><span class="site-name">LinkLLM Server 对话中断流程设计与实现</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">LinkLLM Server 对话中断流程设计与实现</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-02-27T06:30:00.000Z" title="发表于 2026-02-27 14:30:00">2026-02-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-03-19T14:54:14.444Z" title="更新于 2026-03-19 22:54:14">2026-03-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI/">AI</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">2.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>9分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>在构建 LLM 服务网关时，流式响应（SSE）已经成为标配功能。用户可以实时看到 AI 的生成过程，获得更好的交互体验。然而，流式响应也带来了新的挑战：如何优雅地处理用户中断？如何在网络断开时正确清理资源？如何保证中断时已生成的内容不丢失？</p>
+}</script><meta name="generator" content="Hexo 8.1.2"></head><body><div class="bg-animation" id="web_bg" style="background-image: url(/img/top_img.jpg);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">22</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">10</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">4</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/default_img.png);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/img/blog-black.svg" alt="Logo"><span class="site-name">Lavigne-yang.Blog</span></a><a class="nav-page-title" href="/"><span class="site-name">LinkLLM Server 对话中断流程设计与实现</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">LinkLLM Server 对话中断流程设计与实现</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-02-27T06:30:00.000Z" title="发表于 2026-02-27 14:30:00">2026-02-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-03-19T14:54:14.444Z" title="更新于 2026-03-19 22:54:14">2026-03-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI/">AI</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">2.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>9分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>在构建 LLM 服务网关时，流式响应（SSE）已经成为标配功能。用户可以实时看到 AI 的生成过程，获得更好的交互体验。然而，流式响应也带来了新的挑战：如何优雅地处理用户中断？如何在网络断开时正确清理资源？如何保证中断时已生成的内容不丢失？</p>
 <p>本文将分享 LinkLLM 项目中对话中断流程的设计与实现，介绍如何构建一个企业级的流式对话中断机制。</p>
 <h2 id="问题背景"><a href="#问题背景" class="headerlink" title="问题背景"></a>问题背景</h2><h3 id="流式对话的中断场景"><a href="#流式对话的中断场景" class="headerlink" title="流式对话的中断场景"></a>流式对话的中断场景</h3><p>在实际生产环境中，流式对话面临多种中断场景：</p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│                     流式对话中断场景                          │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  场景1: 用户主动中断                                         │</span><br><span class="line">│  用户点击停止按钮 → 需要立即停止生成                          │</span><br><span class="line">│                                                             │</span><br><span class="line">│  场景2: 网络超时/断开                                        │</span><br><span class="line">│  网络中断 → 需要检测并清理资源                                │</span><br><span class="line">│                                                             │</span><br><span class="line">│  场景3: 服务端异常                                           │</span><br><span class="line">│  LLM API 错误 → 需要优雅降级                                 │</span><br><span class="line">│                                                             │</span><br><span class="line">│  场景4: 超时控制                                             │</span><br><span class="line">│  生成超时 → 需要超时熔断                                     │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
@@ -268,42 +310,42 @@
 <tbody><tr>
 <td><code>thinking</code></td>
 <td>AI 思考过程</td>
-<td><code>&#123;&quot;type&quot;:&quot;thinking&quot;,&quot;data&quot;:&quot;...&quot;&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;thinking&quot;,&quot;data&quot;:&quot;...&quot;}</code></td>
 </tr>
 <tr>
 <td><code>text</code></td>
 <td>正式回复内容</td>
-<td><code>&#123;&quot;type&quot;:&quot;text&quot;,&quot;data&quot;:&quot;你好&quot;&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;text&quot;,&quot;data&quot;:&quot;你好&quot;}</code></td>
 </tr>
 <tr>
 <td><code>abort</code></td>
 <td>用户中断</td>
-<td><code>&#123;&quot;type&quot;:&quot;abort&quot;,&quot;reason&quot;:&quot;user_request&quot;&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;abort&quot;,&quot;reason&quot;:&quot;user_request&quot;}</code></td>
 </tr>
 <tr>
 <td><code>timeout</code></td>
 <td>超时中断</td>
-<td><code>&#123;&quot;type&quot;:&quot;timeout&quot;,&quot;elapsed_seconds&quot;:60&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;timeout&quot;,&quot;elapsed_seconds&quot;:60}</code></td>
 </tr>
 <tr>
 <td><code>timeout_warning</code></td>
 <td>超时预警</td>
-<td><code>&#123;&quot;type&quot;:&quot;timeout_warning&quot;,&quot;remaining_seconds&quot;:6&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;timeout_warning&quot;,&quot;remaining_seconds&quot;:6}</code></td>
 </tr>
 <tr>
 <td><code>error</code></td>
 <td>错误事件</td>
-<td><code>&#123;&quot;type&quot;:&quot;error&quot;,&quot;error_code&quot;:&quot;LLM_API_ERROR&quot;&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;error&quot;,&quot;error_code&quot;:&quot;LLM_API_ERROR&quot;}</code></td>
 </tr>
 <tr>
 <td><code>close</code></td>
 <td>生成完成</td>
-<td><code>&#123;&quot;type&quot;:&quot;close&quot;,&quot;msg&quot;:&quot;生成完成&quot;&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;close&quot;,&quot;msg&quot;:&quot;生成完成&quot;}</code></td>
 </tr>
 <tr>
 <td><code>heartbeat</code></td>
 <td>心跳保活</td>
-<td><code>&#123;&quot;type&quot;:&quot;heartbeat&quot;,&quot;msg&quot;:&quot;ping&quot;&#125;</code></td>
+<td><code>{&quot;type&quot;:&quot;heartbeat&quot;,&quot;msg&quot;:&quot;ping&quot;}</code></td>
 </tr>
 </tbody></table>
 <h2 id="中断时序图"><a href="#中断时序图" class="headerlink" title="中断时序图"></a>中断时序图</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">Client                 Server                 AbortManager     LLM</span><br><span class="line">  │                      │                         │            │</span><br><span class="line">  │  POST /completions   │                         │            │</span><br><span class="line">  │  stream=true         │                         │            │</span><br><span class="line">  │─────────────────────►│                         │            │</span><br><span class="line">  │                      │   register(session)     │            │</span><br><span class="line">  │                      │────────────────────────►│            │</span><br><span class="line">  │  SSE: text events    │                         │            │</span><br><span class="line">  │◄─────────────────────│◄────────────────────────│◄───────────│</span><br><span class="line">  │                      │                         │            │</span><br><span class="line">  │  POST /abort         │                         │            │</span><br><span class="line">  │─────────────────────►│                         │            │</span><br><span class="line">  │                      │   request_abort()       │            │</span><br><span class="line">  │                      │────────────────────────►│            │</span><br><span class="line">  │                      │   abort_requested=true  │            │</span><br><span class="line">  │                      │◄────────────────────────│            │</span><br><span class="line">  │  SSE: abort event    │                         │            │</span><br><span class="line">  │◄─────────────────────│◄────────────────────────│            │</span><br><span class="line">  │                      │   unregister(session)   │            │</span><br><span class="line">  │                      │────────────────────────►│            │</span><br></pre></td></tr></table></figure>
