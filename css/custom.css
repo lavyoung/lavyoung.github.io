@@ -1,0 +1,42 @@
+/* Site-level refinements kept outside the npm-managed Butterfly theme. */
+#web_bg {
+  background: #f4f6fb !important;
+}
+
+[data-theme='dark'] #web_bg {
+  background: #0d1117 !important;
+}
+
+#article-container a:not(.headerlink),
+#recent-posts a.article-title {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 3px solid #ffb347;
+  outline-offset: 3px;
+}
+
+@media screen and (max-width: 600px) {
+  #page-header.post-bg {
+    height: 320px;
+  }
+
+  #post-info .post-title {
+    font-size: 1.65em;
+    line-height: 1.35;
+  }
+
+  #post-info #post-meta {
+    font-size: 82%;
+  }
+
+  #post-info #post-meta .meta-secondline,
+  #post-info #post-meta .post-meta-date-created + .post-meta-separator,
+  #post-info #post-meta .post-meta-date .fa-history,
+  #post-info #post-meta .post-meta-date .fa-history + .post-meta-label,
+  #post-info #post-meta .post-meta-date-updated {
+    display: none;
+  }
+}
