@@ -1,0 +1,774 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例 | Lavigne-yang.Blog</title><meta name="author" content="Lavigne-yang"><meta name="copyright" content="Lavigne-yang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="ffffff"><meta name="description" content="从一次 HTTP 请求出发，理解 Netty Pipeline、协议对象转换、异步响应和网关资源生命周期。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例">
+<meta property="og:url" content="https://lavyoung.github.io/2026/10/27/API%E7%BD%91%E5%85%B3HTTP%E6%8E%A5%E5%85%A5%E5%B1%82/index.html">
+<meta property="og:site_name" content="Lavigne-yang.Blog">
+<meta property="og:description" content="从一次 HTTP 请求出发，理解 Netty Pipeline、协议对象转换、异步响应和网关资源生命周期。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://lavyoung.github.io/img/default_img.png">
+<meta property="article:published_time" content="2026-10-27T02:56:53.000Z">
+<meta property="article:modified_time" content="2026-10-27T02:56:53.000Z">
+<meta property="article:author" content="Lavigne-yang">
+<meta property="article:tag" content="API 网关">
+<meta property="article:tag" content="HTTP">
+<meta property="article:tag" content="Java">
+<meta property="article:tag" content="Netty">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://lavyoung.github.io/img/default_img.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例",
+  "url": "https://lavyoung.github.io/2026/10/27/API%E7%BD%91%E5%85%B3HTTP%E6%8E%A5%E5%85%A5%E5%B1%82/",
+  "image": "https://lavyoung.github.io/img/default_img.png",
+  "datePublished": "2026-10-27T02:56:53.000Z",
+  "dateModified": "2026-10-27T02:56:53.000Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Lavigne-yang",
+      "url": "https://lavyoung.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/star-orbit.svg"><link rel="canonical" href="https://lavyoung.github.io/2026/10/27/API%E7%BD%91%E5%85%B3HTTP%E6%8E%A5%E5%85%A5%E5%B1%82/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        const data = { value }
+
+        if (ttl != null) {
+          data.expiry = Date.now() + ttl * 86400000
+        }
+
+        localStorage.setItem(key, JSON.stringify(data))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return
+
+        try {
+          const data = JSON.parse(itemStr)
+
+          if (data.expiry && Date.now() > data.expiry) {
+            localStorage.removeItem(key)
+            return
+          }
+
+          return data.value
+        } catch {
+          localStorage.removeItem(key)
+        }
+      }
+    }
+
+    const scriptCache = new Map()
+    const cssCache = new Map()
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => {
+        if (scriptCache.has(url)) {
+          return scriptCache.get(url)
+        }
+
+        const promise = new Promise((resolve, reject) => {
+          const script = document.createElement('script')
+
+          script.src = url
+          script.async = true
+
+          for (const key in attr) {
+            script.setAttribute(key, attr[key])
+          }
+
+          script.onload = resolve
+          script.onerror = reject
+
+          document.head.appendChild(script)
+        })
+
+        scriptCache.set(url, promise)
+
+        return promise
+      },
+      getCSS: (url, id) => {
+        if (cssCache.has(url)) {
+          return cssCache.get(url)
+        }
+
+        const promise = new Promise((resolve, reject) => {
+          const link = document.createElement('link')
+
+          link.rel = 'stylesheet'
+          link.href = url
+
+          if (id) {
+            link.id = id
+          }
+
+          link.onload = resolve
+          link.onerror = reject
+
+          document.head.appendChild(link)
+        })
+
+        cssCache.set(url, promise)
+
+        return promise
+      },
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const metaThemeColor = document.querySelector('meta[name="theme-color"]')
+      const activateDarkMode = () => {
+        document.documentElement.dataset.theme = 'dark'
+        if (metaThemeColor !== null) {
+          metaThemeColor.setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.dataset.theme = 'light'
+        if (metaThemeColor !== null) {
+          metaThemeColor.setAttribute('content', 'ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          const mediaQueryDark = window.matchMedia('(prefers-color-scheme: dark)')
+          const mediaQueryLight = window.matchMedia('(prefers-color-scheme: light)')
+
+          if (theme === undefined) {
+            if (mediaQueryLight.matches) activateLightMode()
+            else if (mediaQueryDark.matches) activateDarkMode()
+            else {
+              const hour = new Date().getHours()
+              const start = 6
+              const end = 18
+              const isNight =
+                start < end
+                    ? hour < start || hour >= end
+                    : hour >= start || hour < end
+              isNight ? activateDarkMode() : activateLightMode()
+            }
+            mediaQueryDark.addEventListener('change', e => {
+              if (saveToLocal.get('theme') === undefined) {
+                e.matches ? activateDarkMode() : activateLightMode()
+              }
+            })
+          } else {
+            theme === 'light' ? activateLightMode() : activateDarkMode()
+          }
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: {"defaultEncoding":2,"translateDelay":0,"msgToTraditionalChinese":"繁","msgToSimplifiedChinese":"簡"},
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '天',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: true
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><meta name="generator" content="Hexo 8.1.2"></head><body><div class="bg-animation" id="web_bg" style="background-color: #f4f6fb;"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">34</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">65</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">11</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/default_img.png);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/star-orbit.svg" alt="Logo"><span class="site-name">Lavigne-yang.Blog</span></a><a class="nav-page-title" href="/"><span class="site-name">API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/categories/"><i class="fa-fw fas fa-folder"></i><span> 分类</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="fa-fw post-meta-icon far fa-calendar-alt"></i><span class="post-meta-label">发表于</span><time datetime="2026-10-27T02:56:53.000Z" title="发表于 2026-10-27 10:56:53">2026-10-27</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%90%8E%E7%AB%AF%E5%B7%A5%E7%A8%8B/">后端工程</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%90%8E%E7%AB%AF%E5%B7%A5%E7%A8%8B/%E5%BE%AE%E6%9C%8D%E5%8A%A1%E4%B8%8E%E4%B8%AD%E9%97%B4%E4%BB%B6/">微服务与中间件</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>6分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:730,&quot;messagePrev&quot;:&quot;It has been&quot;,&quot;messageNext&quot;:&quot;days since the last update, the content of the article may be outdated.&quot;,&quot;postUpdate&quot;:&quot;2026-10-27 10:56:53&quot;}" hidden></div><p>GateWeave 是一个基于 Java 17、Netty 和 Spring Boot 实现的 API 网关项目。本文先处理其中的 HTTP 接入层：接收请求，<br>把 Netty 消息转换成应用命令，再把执行结果写回连接。路由匹配和 RPC 调用不放在这一层。</p>
+<p>一次请求从进入网关到返回响应，会依次经过 HTTP 解码、消息聚合、模型转换、应用处理和响应编码，完整链路如下。</p>
+<h2 id="一次-HTTP-请求经过了什么"><a href="#一次-HTTP-请求经过了什么" class="headerlink" title="一次 HTTP 请求经过了什么"></a>一次 HTTP 请求经过了什么</h2><div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart LR
+    Client[HTTP 客户端]
+
+    subgraph Netty[Netty 入站适配器]
+        Codec[HttpServerCodec]
+        Aggregator[HttpObjectAggregator]
+        Handler[NettyGatewayRequestHandler]
+        RequestMapper[NettyGatewayRequestMapper]
+        ResponseMapper[NettyGatewayResponseMapper]
+    end
+
+    subgraph Application[应用层]
+        Command[GatewayRequestCommand]
+        UseCase[HandleGatewayRequestUseCase]
+        Response[GatewayResponse]
+    end
+
+    Client --&gt;|HTTP 字节流| Codec
+    Codec --&gt;|HttpRequest &#x2F; HttpContent| Aggregator
+    Aggregator --&gt;|FullHttpRequest| Handler
+    Handler --&gt; RequestMapper
+    RequestMapper --&gt; Command
+    Command --&gt; UseCase
+    UseCase --&gt;|CompletionStage| Response
+    Response --&gt; ResponseMapper
+    ResponseMapper --&gt;|FullHttpResponse| Handler
+    Handler --&gt;|HTTP 响应| Client
+  </pre></div>
+
+<p>图中间有一条很重要的分界线：Netty 对象只存在于入站适配器中。进入应用层的请求已经变成<br><code>GatewayRequestCommand</code>，返回时应用层也只产生 <code>GatewayResponse</code>。网络框架负责传输，应用层负责用例，两者不共享<br>技术对象。</p>
+<h2 id="Pipeline-决定-Handler-能收到什么"><a href="#Pipeline-决定-Handler-能收到什么" class="headerlink" title="Pipeline 决定 Handler 能收到什么"></a>Pipeline 决定 Handler 能收到什么</h2><p>每个新连接建立后，<code>GatewayChannelInitializer</code> 会按顺序装配三个节点：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">channel.pipeline()</span><br><span class="line">        .addLast(<span class="string">&quot;httpCodec&quot;</span>, <span class="keyword">new</span> <span class="title class_">HttpServerCodec</span>())</span><br><span class="line">        .addLast(<span class="string">&quot;httpAggregator&quot;</span>, <span class="keyword">new</span> <span class="title class_">HttpObjectAggregator</span>(maxContentLength))</span><br><span class="line">        .addLast(<span class="string">&quot;gatewayRequestHandler&quot;</span>, requestHandler);</span><br></pre></td></tr></table></figure>
+
+<p><code>HttpServerCodec</code> 负责 HTTP 消息和网络字节之间的转换。此时一次请求仍可能被拆成 <code>HttpRequest</code>、多个<br><code>HttpContent</code> 和一个 <code>LastHttpContent</code>。<code>HttpObjectAggregator</code> 继续把这些片段聚合为 <code>FullHttpRequest</code>，后面的<br>Handler 才能一次拿到请求行、请求头和完整请求体。</p>
+<p>所以 Pipeline 的顺序不是随意排列的。把自定义 Handler 放在聚合器之前，它面对的就是分段消息；放在聚合器之后，<br>它面对的才是完整请求。<code>EmbeddedChannel</code> 很适合验证这类行为，因为不需要真的打开端口，就能把一条请求送进 Pipeline，<br>再检查处理器顺序和输出消息。</p>
+<p>聚合完整请求的代价是内存占用。这里给 <code>HttpObjectAggregator</code> 设置了 1 MiB 上限：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">gateweave:</span></span><br><span class="line">  <span class="attr">server:</span></span><br><span class="line">    <span class="attr">max-content-length:</span> <span class="number">1048576</span></span><br></pre></td></tr></table></figure>
+
+<p>这个配置不能被理解为越大越好。普通 JSON 请求适合先聚合再处理；文件上传、流式代理等场景更适合逐段消费内容，否则<br>并发请求会把大量完整请求体同时留在内存中。</p>
+<h2 id="为什么不能把-FullHttpRequest-传入应用层"><a href="#为什么不能把-FullHttpRequest-传入应用层" class="headerlink" title="为什么不能把 FullHttpRequest 传入应用层"></a>为什么不能把 FullHttpRequest 传入应用层</h2><p><code>FullHttpRequest</code> 很方便，方法、URI、请求头和请求体都能直接读取。但它同时把应用层绑定到了 Netty：更换入口协议时，<br>应用服务也要跟着修改；编写测试时，还要为业务逻辑构造 Netty 对象。</p>
+<p><code>NettyGatewayRequestMapper</code> 在入口处完成一次转换：</p>
+<table>
+<thead>
+<tr>
+<th>Netty 请求数据</th>
+<th>应用层数据</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>HttpMethod</code></td>
+<td><code>String method</code></td>
+</tr>
+<tr>
+<td>请求 URI 字符串</td>
+<td><code>URI uri</code></td>
+</tr>
+<tr>
+<td>Netty <code>HttpHeaders</code></td>
+<td>JDK <code>HttpHeaders</code></td>
+</tr>
+<tr>
+<td><code>ByteBuf</code></td>
+<td><code>byte[] body</code></td>
+</tr>
+<tr>
+<td><code>X-Request-Id</code></td>
+<td><code>String requestId</code></td>
+</tr>
+</tbody></table>
+<p>上游带有 <code>X-Request-Id</code> 时继续使用它，没有时再生成 UUID。这个标识会跟随应用命令进入后续链路，处理失败时日志可以<br>直接关联到原始请求。</p>
+<p>请求模型使用 <code>record</code>，但这并不代表内部数据天然不可变。<code>byte[]</code> 仍然可以被修改，因此构造命令时复制一次，调用<br><code>body()</code> 时再返回副本。这样外部代码既不能通过原始数组修改命令，也不能通过访问器拿到内部数组。</p>
+<h2 id="ByteBuf-为什么必须在异步调用前复制"><a href="#ByteBuf-为什么必须在异步调用前复制" class="headerlink" title="ByteBuf 为什么必须在异步调用前复制"></a>ByteBuf 为什么必须在异步调用前复制</h2><p><code>NettyGatewayRequestHandler</code> 继承 <code>SimpleChannelInboundHandler&lt;FullHttpRequest&gt;</code>。它有一个容易被忽略的行为：<br><code>channelRead0</code> 返回后，Netty 会自动释放收到的请求。</p>
+<p>应用用例返回的却不是同步结果，而是：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">CompletionStage&lt;GatewayResponse&gt; <span class="title function_">handle</span><span class="params">(GatewayRequestCommand command)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>如果命令中继续保存请求的 <code>ByteBuf</code>，异步任务稍后读取数据时，请求对象可能已经释放。Java 引用虽然还在，底层缓冲区<br>却已经失效，最终会出现引用计数异常。</p>
+<p>因此请求映射不是简单地换一个类型，而是一次所有权交接：Handler 还持有 <code>FullHttpRequest</code> 时，把后续需要的数据复制<br>出来；<code>channelRead0</code> 返回后，Netty 可以安全释放原请求，异步应用也拥有独立的数据快照。</p>
+<h2 id="Handler-如何衔接同步事件与异步结果"><a href="#Handler-如何衔接同步事件与异步结果" class="headerlink" title="Handler 如何衔接同步事件与异步结果"></a>Handler 如何衔接同步事件与异步结果</h2><p>Netty 把入站事件交给 Handler 时，当前代码运行在 EventLoop 线程上。Handler 先保存请求的协议版本和 Keep-Alive 状态，<br>完成请求映射后调用应用用例，再通过 <code>whenComplete</code> 等待异步结果。</p>
+<p>它没有在 EventLoop 上阻塞等待结果，也没有在这里决定路由或调用下游服务。成功时，<code>GatewayResponse</code> 交给响应映射器；<br>失败时，日志记录异常堆栈和请求 ID，客户端只收到 <code>500 Internal Server Error</code>。内部服务地址和异常详情不会进入响应体。</p>
+<p>请求本身不合法时，处理方式不同。URI 无法解析说明请求还没有形成有效的应用命令，此时返回 <code>400 Bad Request</code>，并关闭<br>这条连接。Pipeline 中出现无法恢复的异常时，也直接关闭 Channel，避免在未知状态下继续复用连接。</p>
+<h2 id="写出响应后再决定是否关闭连接"><a href="#写出响应后再决定是否关闭连接" class="headerlink" title="写出响应后再决定是否关闭连接"></a>写出响应后再决定是否关闭连接</h2><p><code>GatewayResponse</code> 只描述状态码、响应头和字节数组，不依赖 Netty。返回网络之前，<code>NettyGatewayResponseMapper</code> 才把它<br>转换为 <code>FullHttpResponse</code>。</p>
+<p>转换过程中有几个容易漏掉的细节：</p>
+<ul>
+<li>响应沿用请求的 HTTP 协议版本；</li>
+<li>文本按照 UTF-8 编码；</li>
+<li><code>Content-Length</code> 必须等于最终字节数；</li>
+<li>已知完整长度时关闭分块传输；</li>
+<li>是否保持连接由原请求的 Keep-Alive 语义决定。</li>
+</ul>
+<p>对于非持久连接，不能调用 <code>writeAndFlush</code> 后马上执行 <code>close()</code>。写操作此时可能还在队列里，提前关闭会让响应发送不完整。<br>关闭监听器通过 <code>ChannelFutureListener.CLOSE</code> 挂到写操作上，等响应真正写完后再关闭连接。</p>
+<p>这类传输细节同样可以用 <code>EmbeddedChannel</code> 观察：发送带有 <code>Connection: close</code> 的请求后，先读到完整响应，再看到 Channel<br>进入关闭状态。测试验证的是协议行为，而不是某个私有方法是否被调用。</p>
+<h2 id="谁创建线程，谁负责释放"><a href="#谁创建线程，谁负责释放" class="headerlink" title="谁创建线程，谁负责释放"></a>谁创建线程，谁负责释放</h2><p>服务器启动后长期持有 boss EventLoop、worker EventLoop 和监听 Channel。它们的生命周期如果分散在不同类里，很容易<br>出现端口已经关闭但线程仍存活，或者同一资源被重复销毁的问题。</p>
+<p>资源所有权分成两层：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">Spring 装配层</span><br><span class="line">├── 创建并关闭 boss EventLoopGroup</span><br><span class="line">├── 创建并关闭 worker EventLoopGroup</span><br><span class="line">└── 组装 ServerBootstrap</span><br><span class="line"></span><br><span class="line">NettyGatewayServer</span><br><span class="line">└── 启动并关闭监听 Channel</span><br></pre></td></tr></table></figure>
+
+<p><code>NettyGatewayServer</code> 不擅自销毁外部传入的 EventLoopGroup，只管理自己保存的监听 Channel。它的 <code>start()</code> 和 <code>close()</code><br>保持幂等：重复启动不会再次绑定端口，未启动或已经关闭时再次关闭也不会制造新的异常。</p>
+<p>在测试服务器生命周期时使用随机端口，比写死 7397 更可靠。测试可以确认服务器确实完成绑定、重复启动仍使用同一个监听<br>地址，并在关闭后释放端口；Spring 上下文测试则继续确认 EventLoop 线程最终退出。</p>
+<h2 id="从-HTTP-入口走向真正的网关"><a href="#从-HTTP-入口走向真正的网关" class="headerlink" title="从 HTTP 入口走向真正的网关"></a>从 HTTP 入口走向真正的网关</h2><p>完成这一层之后，请求已经能够进入应用用例，但应用服务还不知道它应该访问哪个下游服务。后续加入路由表和 RPC 调用时，<br>Netty Handler 不需要感知 Dubbo 的 <code>GenericService</code>、注册中心或服务版本。</p>
+<p>HTTP 入口只负责把网络世界转换成应用世界。下一篇会从 <code>GatewayRequestCommand</code> 继续向内推进，让方法和路径匹配到<br><code>InvocationTarget</code>，再通过 Dubbo 泛化调用访问真正的 Provider。</p>
+<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><ul>
+<li><a target="_blank" rel="noopener" href="https://github.com/lavyoung/gateweave">GateWeave</a></li>
+<li><a target="_blank" rel="noopener" href="https://netty.io/4.1/api/">Netty 4.1 API Reference</a></li>
+<li><a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc9110">HTTP Semantics, RFC 9110</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://lavyoung.github.io">Lavigne-yang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://lavyoung.github.io/2026/10/27/API%E7%BD%91%E5%85%B3HTTP%E6%8E%A5%E5%85%A5%E5%B1%82/">https://lavyoung.github.io/2026/10/27/API%E7%BD%91%E5%85%B3HTTP%E6%8E%A5%E5%85%A5%E5%B1%82/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://lavyoung.github.io" target="_blank">Lavigne-yang.Blog</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/java/">Java</a><a class="post-meta__tags" href="/tags/Netty/">Netty</a><a class="post-meta__tags" href="/tags/API-%E7%BD%91%E5%85%B3/">API 网关</a><a class="post-meta__tags" href="/tags/HTTP/">HTTP</a></div><div class="post-share"><div class="social-share" data-image="/img/default_img.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/" title="LinkLLM Server 对话中断流程设计与实现"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/ai/linkllm-stream.webp" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">LinkLLM Server 对话中断流程设计与实现</div></div><div class="info-2"><div class="info-item-1">解析 LinkLLM Server 流式对话中断机制，涵盖主动取消、断连检测、资源清理和内容持久化。</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/06/09/Nacos%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86%EF%BC%88%E4%B8%80%EF%BC%89/" title="Nacos 原理：服务发现、配置中心与一致性协议"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/ai/nacos-distributed.webp" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-06-09</div><div class="info-item-2">Nacos 原理：服务发现、配置中心与一致性协议</div></div><div class="info-2"><div class="info-item-1">解析 Nacos 服务注册发现、健康检查、配置管理及 2.x 到 3.x 的关键架构变化。</div></div></div></a><a class="pagination-related" href="/2025/04/11/LeetCode-%E8%B4%AA%E5%BF%83%E4%B8%8E%E5%8A%A8%E6%80%81%E8%A7%84%E5%88%92/" title="LeetCode 热题：贪心与动态规划"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/unsplash/greedy-dp-maze.webp" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-04-11</div><div class="info-item-2">LeetCode 热题：贪心与动态规划</div></div><div class="info-2"><div class="info-item-1">汇总贪心、动态规划和多维动态规划热题，整理状态定义、转移方程和 Java 实现。</div></div></div></a><a class="pagination-related" href="/2025/04/11/LeetCode-%E5%9B%BE%E8%AE%BA%E4%B8%8E%E5%9B%9E%E6%BA%AF/" title="LeetCode 热题：图论与回溯"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/unsplash/graph-backtracking-path.webp" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-04-11</div><div class="info-item-2">LeetCode 热题：图论与回溯</div></div><div class="info-2"><div class="info-item-1">汇总图遍历、拓扑排序、排列组合与搜索剪枝热题，整理建模方式和 Java 实现。</div></div></div></a><a class="pagination-related" href="/2025/05/28/SpringBoot%E6%9C%8D%E5%8A%A1%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96/" title="Spring Boot 服务性能：并发能力、限流与启动优化"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/ai/spring-performance.webp" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-05-28</div><div class="info-item-2">Spring Boot 服务性能：并发能力、限流与启动优化</div></div><div class="info-2"><div class="info-item-1">整理 Spring Boot 服务并发能力评估、Sentinel 限流算法和启动速度优化的分析方法。</div></div></div></a><a class="pagination-related" href="/2025/03/28/LeetCode-%E5%93%88%E5%B8%8C%E6%95%B0%E7%BB%84%E4%B8%8E%E5%89%8D%E7%BC%80%E5%92%8C/" title="LeetCode 热题：哈希、数组与前缀和"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/unsplash/hash-array-grid.webp" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-03-28</div><div class="info-item-2">LeetCode 热题：哈希、数组与前缀和</div></div><div class="info-2"><div class="info-item-1">汇总哈希、子串、普通数组与前缀和相关 LeetCode 热题，整理关键思路、复杂度和 Java 实现。</div></div></div></a><a class="pagination-related" href="/2025/05/28/Redis%E7%BC%93%E5%AD%98%E4%B8%80%E8%87%B4%E6%80%A7%E4%B8%8E%E5%88%86%E5%B8%83%E5%BC%8F%E5%8D%8F%E8%B0%83/" title="Redis 缓存一致性、分布式锁与缓存穿透"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/unsplash/redis-server-room.webp" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-05-28</div><div class="info-item-2">Redis 缓存一致性、分布式锁与缓存穿透</div></div><div class="info-2"><div class="info-item-1">整理 Redis 与数据库一致性、分布式锁和布隆过滤器的实现思路、风险与适用边界。</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="giscus-wrap"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Lavigne-yang</div><div class="author-info-description">Java 后端 · 分布式系统 · AI 工程实践</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">34</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">65</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">11</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/lavyoung"><i class="fab fa-github"></i><span>关注</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/lavyoung" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:lavyoung1325@outlook.com" target="_blank" title="Email"><i class="fas fa-envelope" style="color: #22205e;"></i></a></div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E6%AC%A1-HTTP-%E8%AF%B7%E6%B1%82%E7%BB%8F%E8%BF%87%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.</span> <span class="toc-text">一次 HTTP 请求经过了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Pipeline-%E5%86%B3%E5%AE%9A-Handler-%E8%83%BD%E6%94%B6%E5%88%B0%E4%BB%80%E4%B9%88"><span class="toc-number">2.</span> <span class="toc-text">Pipeline 决定 Handler 能收到什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E8%83%BD%E6%8A%8A-FullHttpRequest-%E4%BC%A0%E5%85%A5%E5%BA%94%E7%94%A8%E5%B1%82"><span class="toc-number">3.</span> <span class="toc-text">为什么不能把 FullHttpRequest 传入应用层</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#ByteBuf-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%BF%85%E9%A1%BB%E5%9C%A8%E5%BC%82%E6%AD%A5%E8%B0%83%E7%94%A8%E5%89%8D%E5%A4%8D%E5%88%B6"><span class="toc-number">4.</span> <span class="toc-text">ByteBuf 为什么必须在异步调用前复制</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Handler-%E5%A6%82%E4%BD%95%E8%A1%94%E6%8E%A5%E5%90%8C%E6%AD%A5%E4%BA%8B%E4%BB%B6%E4%B8%8E%E5%BC%82%E6%AD%A5%E7%BB%93%E6%9E%9C"><span class="toc-number">5.</span> <span class="toc-text">Handler 如何衔接同步事件与异步结果</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%86%99%E5%87%BA%E5%93%8D%E5%BA%94%E5%90%8E%E5%86%8D%E5%86%B3%E5%AE%9A%E6%98%AF%E5%90%A6%E5%85%B3%E9%97%AD%E8%BF%9E%E6%8E%A5"><span class="toc-number">6.</span> <span class="toc-text">写出响应后再决定是否关闭连接</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B0%81%E5%88%9B%E5%BB%BA%E7%BA%BF%E7%A8%8B%EF%BC%8C%E8%B0%81%E8%B4%9F%E8%B4%A3%E9%87%8A%E6%94%BE"><span class="toc-number">7.</span> <span class="toc-text">谁创建线程，谁负责释放</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8E-HTTP-%E5%85%A5%E5%8F%A3%E8%B5%B0%E5%90%91%E7%9C%9F%E6%AD%A3%E7%9A%84%E7%BD%91%E5%85%B3"><span class="toc-number">8.</span> <span class="toc-text">从 HTTP 入口走向真正的网关</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">9.</span> <span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/10/27/API%E7%BD%91%E5%85%B3HTTP%E6%8E%A5%E5%85%A5%E5%B1%82/" title="API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/default_img.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例"/></a><div class="content"><a class="title" href="/2026/10/27/API%E7%BD%91%E5%85%B3HTTP%E6%8E%A5%E5%85%A5%E5%B1%82/" title="API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例">API 网关 HTTP 接入层：从 Netty Pipeline 到应用用例</a><time datetime="2026-10-27T02:56:53.000Z" title="发表于 2026-10-27 10:56:53">2026-10-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/" title="LinkLLM Server 对话中断流程设计与实现"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/ai/linkllm-stream.webp" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="LinkLLM Server 对话中断流程设计与实现"/></a><div class="content"><a class="title" href="/2026/02/27/LinkLLM-%E5%AF%B9%E8%AF%9D%E4%B8%AD%E6%96%AD%E6%B5%81%E7%A8%8B%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/" title="LinkLLM Server 对话中断流程设计与实现">LinkLLM Server 对话中断流程设计与实现</a><time datetime="2026-02-27T06:30:00.000Z" title="发表于 2026-02-27 14:30:00">2026-02-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/06/09/Nacos%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86%EF%BC%88%E4%B8%80%EF%BC%89/" title="Nacos 原理：服务发现、配置中心与一致性协议"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/ai/nacos-distributed.webp" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Nacos 原理：服务发现、配置中心与一致性协议"/></a><div class="content"><a class="title" href="/2025/06/09/Nacos%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86%EF%BC%88%E4%B8%80%EF%BC%89/" title="Nacos 原理：服务发现、配置中心与一致性协议">Nacos 原理：服务发现、配置中心与一致性协议</a><time datetime="2025-06-09T12:14:21.000Z" title="发表于 2025-06-09 20:14:21">2025-06-09</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/06/09/SpringBoot%E5%90%AF%E5%8A%A8%E5%8E%9F%E7%90%86%E8%A7%A3%E6%9E%90/" title="Spring Boot 启动流程：从 SpringApplication.run 到容器刷新"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/article/covers/ai/spring-startup.webp" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Spring Boot 启动流程：从 SpringApplication.run 到容器刷新"/></a><div class="content"><a class="title" href="/2025/06/09/SpringBoot%E5%90%AF%E5%8A%A8%E5%8E%9F%E7%90%86%E8%A7%A3%E6%9E%90/" title="Spring Boot 启动流程：从 SpringApplication.run 到容器刷新">Spring Boot 启动流程：从 SpringApplication.run 到容器刷新</a><time datetime="2025-06-09T12:14:21.000Z" title="发表于 2025-06-09 20:14:21">2025-06-09</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2022 - 2026 By Lavigne-yang</span></div><div class="footer_custom_text">记录 Java 后端、分布式系统与 AI 工程实践</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="translateLink" type="button" title="简繁转换">繁</button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="/js/tw_cn.js"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.innerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    // Clean up previous event listeners and pending frames
+    if (wrap.__mermaidAbortController) {
+      wrap.__mermaidAbortController.abort()
+      if (wrap.__mermaidRafId) cancelAnimationFrame(wrap.__mermaidRafId)
+    }
+    const ac = new AbortController()
+    wrap.__mermaidAbortController = ac
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+    // Disable default gestures to prevent scroll chaining and pinch-zoom penetration in Chrome
+    svg.style.touchAction = 'none'
+
+    // Cache BoundingClientRect, throttled on scroll to reduce reflow
+    let cachedRect = svg.getBoundingClientRect()
+    let rectDirty = false
+    const markRectDirty = () => { rectDirty = true }
+    window.addEventListener('resize', markRectDirty, { signal: ac.signal })
+    window.addEventListener('scroll', markRectDirty, { signal: ac.signal, capture: true })
+    const getRect = () => {
+      if (rectDirty) {
+        cachedRect = svg.getBoundingClientRect()
+        rectDirty = false
+      }
+      return cachedRect
+    }
+
+    // Precompute clamp bounds from initial viewBox
+    const minW = initVb[2] * 0.1
+    const maxW = initVb[2] * 10
+    const minH = initVb[3] * 0.1
+    const maxH = initVb[3] * 10
+    const clampVb = vb => {
+      const out = vb.slice()
+      out[2] = clamp(out[2], minW, maxW)
+      out[3] = clamp(out[3], minH, maxH)
+      return out
+    }
+
+    // Throttle DOM updates using requestAnimationFrame
+    let pendingVb = null
+    let rafId = null
+    const applyVb = () => {
+      if (pendingVb) {
+        wrap.__mermaidCurViewBox = pendingVb
+        setSvgViewBox(svg, pendingVb)
+        pendingVb = null
+      }
+      rafId = null
+      wrap.__mermaidRafId = null
+    }
+    const setCurVb = vb => {
+      pendingVb = clampVb(vb)
+      if (!rafId) {
+        rafId = requestAnimationFrame(applyVb)
+        wrap.__mermaidRafId = rafId
+      }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      lastPointerX: 0,
+      lastPointerY: 0
+    }
+
+    const onPointerDown = e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      const curVb = wrap.__mermaidCurViewBox
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (state.pointers.size === 1) {
+        state.startVb = curVb.slice()
+        state.lastPointerX = e.clientX
+        state.lastPointerY = e.clientY
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = curVb.slice()
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      const curVb = wrap.__mermaidCurViewBox
+      const rect = getRect()
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = state.pointers.values().next().value
+        const dxClient = p.x - state.lastPointerX
+        const dyClient = p.y - state.lastPointerY
+        state.lastPointerX = p.x
+        state.lastPointerY = p.y
+        const dx = dxClient * (curVb[2] / rect.width)
+        const dy = dyClient * (curVb[3] / rect.height)
+        setCurVb([curVb[0] - dx, curVb[1] - dy, curVb[2], curVb[3]])
+        return
+      }
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const px = curVb[0] + (cx - rect.left) * (curVb[2] / rect.width)
+        const py = curVb[1] + (cy - rect.top) * (curVb[3] / rect.height)
+        setCurVb(zoomAtPoint(state.startVb, factor, px, py))
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      // Release PointerCapture to avoid event capture anomalies
+      if (svg.hasPointerCapture && svg.hasPointerCapture(e.pointerId)) {
+        svg.releasePointerCapture(e.pointerId)
+      }
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+      } else if (state.pointers.size === 1) {
+        const p = state.pointers.values().next().value
+        state.lastPointerX = p.x
+        state.lastPointerY = p.y
+      }
+    }
+
+    const onWheel = e => {
+      // Prevent event bubbling from triggering external scroll
+      e.preventDefault()
+      e.stopPropagation()
+      // Normalize deltaY across deltaMode (Chrome uses pixels, Safari uses lines)
+      let delta = e.deltaY
+      if (e.deltaMode === 1) delta *= 16
+      else if (e.deltaMode === 2) delta *= 400
+
+      // Continuous zoom factor: smoother than fixed 1.1/0.9 steps
+      const zoomFactor = Math.pow(1.001, delta)
+
+      const curVb = wrap.__mermaidCurViewBox
+      const rect = getRect()
+      const px = curVb[0] + (e.clientX - rect.left) * (curVb[2] / rect.width)
+      const py = curVb[1] + (e.clientY - rect.top) * (curVb[3] / rect.height)
+      setCurVb(zoomAtPoint(curVb, zoomFactor, px, py))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (init) setCurVb(init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown, { signal: ac.signal })
+    svg.addEventListener('pointermove', onPointerMove, { signal: ac.signal })
+    svg.addEventListener('pointerup', onPointerUpOrCancel, { signal: ac.signal })
+    svg.addEventListener('pointercancel', onPointerUpOrCancel, { signal: ac.signal })
+    svg.addEventListener('wheel', onWheel, { passive: false, signal: ac.signal })
+    svg.addEventListener('dblclick', onDblClick, { signal: ac.signal })
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      // Clean up event listeners before removing old SVG
+      if (item.__mermaidAbortController) {
+        item.__mermaidAbortController.abort()
+      }
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      let config = {}
+      try {
+        config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      } catch (e) {
+        console.warn('[mermaid] failed to parse dataset.config:', e)
+      }
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+      const handleError = err => {
+        console.error(`[mermaid] render failed for block #${index}:`, err)
+        const errorEl = document.createElement('div')
+        errorEl.className = 'mermaid-error'
+        errorEl.textContent = `Mermaid render error: ${err.message || err}`
+        mermaidSrc.insertAdjacentElement('afterend', errorEl)
+      }
+
+      try {
+        const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+        // mermaid v9 and v10 compatibility
+        if (typeof renderFn === 'string') {
+          renderMermaid(renderFn)
+        } else {
+          renderFn.then(({ svg }) => renderMermaid(svg)).catch(handleError)
+        }
+      } catch (err) {
+        handleError(err)
+      }
+    })
+  }
+
+  const codeToMermaid = $article => {
+    const codeMermaidEle = $article.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    const $article = document.getElementById('article-container')
+    if (!$article) return
+
+    if (false) codeToMermaid($article)
+    const $mermaid = $article.querySelectorAll('.mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const getGiscusTheme = theme => theme === 'dark' ? 'dark' : 'light'
+
+  const createScriptElement = config => {
+    const ele = document.createElement('script')
+    Object.entries(config).forEach(([key, value]) => {
+      ele.setAttribute(key, value)
+    })
+    return ele
+  }
+
+  const loadGiscus = (el = document, key) => {
+    const mappingConfig = isShuoshuo
+      ? { 'data-mapping': 'specific', 'data-term': key }
+      : { 'data-mapping': (option && option['data-mapping']) || 'pathname' }
+
+    const giscusConfig = {
+      src: 'https://giscus.app/client.js',
+      'data-repo': 'lavyoung/giscus_comments',
+      'data-repo-id': 'R_kgDOOyjQAA',
+      'data-category-id': 'DIC_kwDOOyjQAM4Cqumv',
+      'data-theme': getGiscusTheme(document.documentElement.getAttribute('data-theme')),
+      'data-reactions-enabled': '1',
+      crossorigin: 'anonymous',
+      async: true,
+      ...option,
+      ...mappingConfig
+    }
+
+    const scriptElement = createScriptElement(giscusConfig)
+
+    el.querySelector('#giscus-wrap').appendChild(scriptElement)
+
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGiscus = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+  }
+
+  const changeGiscusTheme = theme => {
+    const iframe = document.querySelector('#giscus-wrap iframe')
+    if (iframe) {
+      const message = {
+        giscus: {
+          setConfig: {
+            theme: getGiscusTheme(theme)
+          }
+        }
+      }
+      iframe.contentWindow.postMessage(message, 'https://giscus.app')
+    }
+  }
+
+  btf.addGlobalFn('themeChange', changeGiscusTheme, 'giscus')
+
+  if (isShuoshuo) {
+    'Giscus' === 'Giscus'
+      ? window.shuoshuoComment = { loadComment: loadGiscus }
+      : window.loadOtherComment = loadGiscus
+    return
+  }
+
+  if ('Giscus' === 'Giscus' || !true) {
+    if (true) btf.loadComment(document.getElementById('giscus-wrap'), loadGiscus)
+    else loadGiscus()
+  } else {
+    window.loadOtherComment = loadGiscus
+  }
+})()</script></div><script src="/js/infinite-scroll.js" defer></script><script async data-pjax src="https://cdn.bootcdn.net/ajax/libs/busuanzi/2.3.0/bsz.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div></div></body></html>
